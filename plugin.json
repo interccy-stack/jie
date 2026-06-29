@@ -1,0 +1,40 @@
+{
+  "id": "jie-browser",
+  "name": "界",
+  "version": "2.0.0",
+  "type": "general",
+  "description": "AI 浏览器 - 让 AI 像人一样看界面、操作界面、理解界面。跨平台桌面自动化中枢 (Windows + Linux)。v2.0.0新增：Linux支持、统一API。",
+  "description_i18n": {
+    "zh-CN": "AI 浏览器 — 让 AI 像人一样「看」界面、「操作」界面、「理解」界面。基于 Windows MCP 的桌面自动化中枢。v1.1.0新增：定时任务、录制回放、OCR识别、智能决策。",
+    "en-US": "AI Browser — Let AI see, operate, and understand interfaces like a human. Desktop automation hub powered by Windows MCP. v1.1.0 adds: scheduled tasks, record/playback, OCR, smart decisions."
+  },
+  "author": "0+1+2≠3 Team 115886",
+  "entry": {
+    "frontend": "frontend/dist/index.js",
+    "backend": "plugin.py"
+  },
+  "dependencies": [
+    "Pillow>=10.0.0",
+    "httpx>=0.27.0",
+    "pytesseract>=0.3.10"
+  ],
+  "min_version": "1.1.10",
+  "meta": {
+    "category": "desktop-automation",
+    "tools_count": 16,
+    "skills_count": 1,
+    "concept": "观察 → 思考 → 行动 → 验证",
+    "core_capabilities": [
+      "界面感知：截图 + UI 元素树提取",
+      "语义理解：LLM 分析界面意图",
+      "自动操作：点击/输入/滚动/拖拽",
+      "任务编排：多步骤自动化流程",
+      "结果验证：操作后截图确认",
+      "记忆学习：记住常用操作路径",
+      "定时任务：按计划自动执行",
+      "录制回放：记录并重放操作",
+      "OCR识别：识别屏幕文字",
+      "智能决策：条件判断自动响应"
+    ]
+  }
+}
