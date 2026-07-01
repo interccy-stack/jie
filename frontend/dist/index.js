@@ -242,8 +242,8 @@
     }
   if (r.menu && r.menu.add)
     try {
-      r.menu.add(v, [{ id: "jie-browser-main", location: "primary.settings", label: "界", icon: function() {
-        return t("span", { style: { fontSize: "18px" } }, "🖥️");
+      r.menu.add(v, [{ id: "jie-browser-main", location: "primary.settings", label: "\u754c", icon: function() {
+        return t("span", { style: { fontSize: "18px" } }, "\u7834");
       }, route: "jie-browser.home", order: 30 }]);
     } catch (e) {
       console.log("menu.add err:", e);

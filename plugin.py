@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-界 (Jie) v2.0.1 — AI 浏览器
+界 (Jie) v2.0.2 — AI 浏览器
 让 AI 像人一样「看」界面、「操作」界面、「理解」界面
-跨平台桌面自动化中枢 (Windows + Linux+macOS)
+跨平台桌面自动化中枢 (Windows + Linux + macOS)
+v2.0.2 新增: OCR识图、UI元素识别(Accessibility)、录制回放持久化、扩展键码(含多媒体键)
 """
 
 import base64
@@ -22,6 +23,40 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 logger = logging.getLogger("qwenpaw.界")
+
+# ── v2.0.2 可选导入：OCR ──────────────────────────────
+try:
+    import pytesseract
+    HAS_TESSERACT = True
+    # 尝试自动定位 tesseract 安装路径
+    import shutil
+    if not shutil.which('tesseract'):
+        _common_paths = [
+            r'C:\Program Files\Tesseract-OCR\tesseract.exe',
+            r'C:\Program Files (x86)\Tesseract-OCR\tesseract.exe',
+        ]
+        for _p in _common_paths:
+            if os.path.exists(_p):
+                pytesseract.pytesseract.tesseract_cmd = _p
+                break
+except ImportError:
+    HAS_TESSERACT = False
+    logger.info("pytesseract 未安装，OCR功能不可用")
+
+# ── v2.0.2 可选导入：UI Automation ─────────────────────
+try:
+    import uiautomation as auto
+    HAS_UI_AUTO = True
+except ImportError:
+    HAS_UI_AUTO = False
+    logger.info("uiautomation 未安装，UI元素识别不可用")
+
+# ── v2.0.2 可选导入：pywinauto 备用 ────────────────────
+try:
+    import pywinauto
+    HAS_PYWINAUTO = True
+except ImportError:
+    HAS_PYWINAUTO = False
 
 # ── 平台检测 ───────────────────────────────────────────
 IS_WINDOWS = platform.system() == 'Windows'
@@ -305,6 +340,24 @@ class PlaybackRequest(BaseModel):
     name: str
     speed: float = 1.0
 
+# ── v2.0.2 新增模型 ──────────────────────────────────
+class FindTextRequest(BaseModel):
+    text: str
+    region: Optional[str] = None  # "x,y,w,h" or "full"
+
+class UIElementRequest(BaseModel):
+    name: str = ""
+    control_type: str = ""       # Button, Edit, Text, ListItem, etc.
+    automation_id: str = ""
+
+class UIActionRequest(BaseModel):
+    name: str = ""
+    control_type: str = ""
+    action: str = "click"        # click, get_text, focus, double_click
+
+class RecordSaveRequest(BaseModel):
+    name: str = "recording"
+
 # ── 跨平台实现 ──────────────────────────────────────────
 
 def _get_screen_size() -> tuple:
@@ -377,6 +430,78 @@ def _capture_screenshot() -> Dict[str, Any]:
             return {"success": False, "error": f"不支持的平台: {platform.system()}"}
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+# ── v2.0.2 OCR 识别 ──────────────────────────────────
+def _ocr_screen(region: Optional[str] = None, lang: str = "chi_sim+eng") -> Dict[str, Any]:
+    """OCR识别屏幕文字 - 支持全屏或指定区域"""
+    if not HAS_TESSERACT:
+        return {"success": False, "error": "pytesseract 未安装，请执行: pip install pytesseract"}
+    try:
+        if not HAS_PIL:
+            return {"success": False, "error": "Pillow 未安装"}
+        img = ImageGrab.grab()
+        if region and region != "full":
+            parts = region.replace(',', ' ').split()
+            if len(parts) == 4:
+                rx, ry, rw, rh = map(int, parts)
+                img = img.crop((rx, ry, rx+rw, ry+rh))
+        data = pytesseract.image_to_data(img, lang=lang, output_type=pytesseract.Output.DICT)
+        words = []
+        for i in range(len(data['text'])):
+            text = data['text'][i].strip()
+            if text:
+                words.append({
+                    "text": text,
+                    "confidence": int(data['conf'][i]) if data['conf'][i] != '-1' else 0,
+                    "x": data['left'][i],
+                    "y": data['top'][i],
+                    "w": data['width'][i],
+                    "h": data['height'][i],
+                })
+        full_text = pytesseract.image_to_string(img, lang=lang).strip()
+        return {
+            "success": True,
+            "text": full_text,
+            "words": words,
+            "word_count": len(words),
+        }
+    except Exception as e:
+        return {"success": False, "error": f"OCR识别失败: {str(e)}"}
+
+def _find_text_on_screen(target: str, region: Optional[str] = None) -> Dict[str, Any]:
+    """在屏幕查找指定文字，返回坐标"""
+    ocr_result = _ocr_screen(region)
+    if not ocr_result['success']:
+        return ocr_result
+    matches = []
+    for w in ocr_result.get('words', []):
+        if target.lower() in w['text'].lower():
+            matches.append({
+                "text": w['text'],
+                "confidence": w['confidence'],
+                "center_x": w['x'] + w['w'] // 2,
+                "center_y": w['y'] + w['h'] // 2,
+                "x": w['x'],
+                "y": w['y'],
+                "w": w['w'],
+                "h": w['h'],
+            })
+    return {
+        "success": True,
+        "found": len(matches) > 0,
+        "matches": matches,
+        "count": len(matches),
+    }
+
+def _click_text(text: str, region: Optional[str] = None) -> Dict[str, Any]:
+    """查找文字并点击"""
+    result = _find_text_on_screen(text, region)
+    if not result['success']:
+        return result
+    if not result['found']:
+        return {"success": False, "found": False, "error": f"未找到文字: {text}"}
+    match = result['matches'][0]
+    return _click(match['center_x'], match['center_y'])
 
 def _click(x: int, y: int, button: str = "left", clicks: int = 1) -> Dict[str, Any]:
     """点击 - 跨平台"""
@@ -495,8 +620,40 @@ def _shortcut(keys: str) -> Dict[str, Any]:
                 'f1': 0x70, 'f2': 0x71, 'f3': 0x72, 'f4': 0x73,
                 'f5': 0x74, 'f6': 0x75, 'f7': 0x76, 'f8': 0x77,
                 'f9': 0x78, 'f10': 0x79, 'f11': 0x7A, 'f12': 0x7B,
+                'f13': 0x7C, 'f14': 0x7D, 'f15': 0x7E, 'f16': 0x7F,
+                'f17': 0x80, 'f18': 0x81, 'f19': 0x82, 'f20': 0x83,
+                'f21': 0x84, 'f22': 0x85, 'f23': 0x86, 'f24': 0x87,
                 'plus': 0xBB, 'equal': 0xBB, 'minus': 0xBD,
                 'comma': 0xBC, 'period': 0xBE, 'dot': 0xBE,
+                'semicolon': 0xBA, 'colon': 0xBA,
+                'quote': 0xDE, 'apostrophe': 0xDE,
+                'backslash': 0xDC, 'slash': 0xBF, 'pipe': 0xDC,
+                'lbracket': 0xDB, 'rbracket': 0xDD,
+                'lbrace': 0xDB, 'rbrace': 0xDD,
+                'tilde': 0xC0, 'backtick': 0xC0,
+                # 多媒体键 v2.0.2
+                'volumemute': 0xAD, 'volume_mute': 0xAD,
+                'volumedown': 0xAE, 'volume_down': 0xAE,
+                'volumeup': 0xAF, 'volume_up': 0xAF,
+                'nexttrack': 0xB0, 'next_track': 0xB0,
+                'prevtrack': 0xB1, 'prev_track': 0xB1,
+                'media_stop': 0xB2, 'mediastop': 0xB2,
+                'playpause': 0xB3, 'play_pause': 0xB3,
+                'launchmail': 0xB4, 'launch_mail': 0xB4,
+                'launchmedia': 0xB5, 'launch_media': 0xB5,
+                'launchapp1': 0xB6, 'launch_app1': 0xB6,
+                'launchapp2': 0xB7, 'launch_app2': 0xB7,
+                # 浏览器键
+                'browser_back': 0xA6, 'browserback': 0xA6,
+                'browser_forward': 0xA7, 'browserforward': 0xA7,
+                'browser_refresh': 0xA8, 'browserrefresh': 0xA8,
+                'browser_stop': 0xA9, 'browserstop': 0xA9,
+                'browser_search': 0xAA, 'browsersearch': 0xAA,
+                'browser_favorites': 0xAB, 'browserfavorites': 0xAB,
+                'browser_home': 0xAC, 'browserhome': 0xAC,
+                # 功能键
+                'sleep': 0x5F,
+                'zoomin': 0x5F,  # 缩放未映射到标准 VK，用 keybd_event 较复杂
             }
             parts = keys.lower().split('+')
             mod_keys = [p for p in parts if p in ('ctrl','control','alt','menu','shift','win','lwin')]
@@ -810,15 +967,144 @@ def _activate_window(title: str) -> Dict[str, Any]:
     except Exception as e:
         return {"success": False, "error": str(e)}
 
-# ── 录制回放功能 ──────────────────────────────────────
+# ── v2.0.2 UI Automation 元素识别 ──────────────────────
+def _get_ui_elements() -> Dict[str, Any]:
+    """获取当前活动窗口的 Accessibility UI 元素树"""
+    if not HAS_UI_AUTO:
+        return {"success": False, "error": "uiautomation 未安装，请执行: pip install uiautomation"}
+    try:
+        root = auto.GetRootControl()
+        active = auto.GetForegroundControl()
+        elements = []
+        def walk(node, depth=0):
+            if depth > 4:
+                return
+            try:
+                name = node.Name or ""
+                ctype = node.ControlTypeName or ""
+                rect = node.BoundingRectangle
+                elements.append({
+                    "name": name[:60],
+                    "control_type": ctype,
+                    "automation_id": node.AutomationId or "",
+                    "x": int(rect.left) if rect else 0,
+                    "y": int(rect.top) if rect else 0,
+                    "width": int(rect.width()) if rect else 0,
+                    "height": int(rect.height()) if rect else 0,
+                    "depth": depth,
+                })
+                for child in node.GetChildren():
+                    walk(child, depth + 1)
+            except Exception:
+                pass
+        if active:
+            walk(active, 0)
+        return {"success": True, "count": len(elements), "elements": elements[:100]}
+    except Exception as e:
+        return {"success": False, "error": f"UI Automation 失败: {str(e)}"}
+
+def _find_ui_element(name: str = "", control_type: str = "") -> Dict[str, Any]:
+    """查找 UI 元素（按名称/类型）"""
+    if not HAS_UI_AUTO:
+        return {"success": False, "error": "uiautomation 未安装"}
+    try:
+        root = auto.GetRootControl()
+        condition = auto.ControlCondition()
+        if name:
+            # 模糊匹配名称
+            elems = []
+            for ctrl in auto.GetRootControl().GetChildren():
+                try:
+                    if name.lower() in (ctrl.Name or "").lower():
+                        rect = ctrl.BoundingRectangle
+                        elems.append({
+                            "name": ctrl.Name,
+                            "control_type": ctrl.ControlTypeName,
+                            "automation_id": ctrl.AutomationId or "",
+                            "x": int(rect.left) if rect else 0,
+                            "y": int(rect.top) if rect else 0,
+                            "width": int(rect.width()) if rect else 0,
+                            "height": int(rect.height()) if rect else 0,
+                        })
+                except Exception:
+                    pass
+            return {"success": True, "count": len(elems), "matches": elems[:20]}
+        return {"success": True, "count": 0, "matches": []}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+def _click_ui_element(name: str = "", control_type: str = "") -> Dict[str, Any]:
+    """点击 UI 元素（按名称/类型）"""
+    result = _find_ui_element(name, control_type)
+    if not result['success']:
+        return result
+    if result['count'] == 0:
+        return {"success": False, "error": f"未找到元素: name={name}, type={control_type}"}
+    match = result['matches'][0]
+    cx = match['x'] + match['width'] // 2
+    cy = match['y'] + match['height'] // 2
+    click_result = _click(cx, cy)
+    if click_result['success']:
+        return {"success": True, "element": match, "clicked_at": (cx, cy)}
+    return click_result
+
+# ── v2.0.2 录制回放持久化 ──────────────────────────────
 import threading
 
 _current_recording = None
 _recorded_actions = []
 _record_lock = threading.Lock()
+_RECORDINGS_DIR = Path(__file__).resolve().parent / "recordings"
+
+def _ensure_recordings_dir():
+    """确保录制目录存在"""
+    _RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
+
+def _save_recording_to_file(name: str) -> Dict[str, Any]:
+    """将内存中的录制保存到 JSON 文件"""
+    global _current_recording, _recorded_actions
+    _ensure_recordings_dir()
+    filepath = _RECORDINGS_DIR / f"{name}.json"
+    data = {
+        "name": name,
+        "created_at": time.time(),
+        "action_count": len(_recorded_actions),
+        "actions": _recorded_actions,
+    }
+    with open(filepath, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    return {"success": True, "name": name, "path": str(filepath), "count": len(_recorded_actions)}
+
+def _load_recording_from_file(name: str) -> Dict[str, Any]:
+    """从 JSON 文件加载录制"""
+    _ensure_recordings_dir()
+    filepath = _RECORDINGS_DIR / f"{name}.json"
+    if not filepath.exists():
+        return {"success": False, "error": f"录制文件不存在: {name}"}
+    with open(filepath, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+    return {"success": True, "name": name, "actions": data.get("actions", []), "count": len(data.get("actions", []))}
+
+def _list_saved_recordings() -> List[Dict[str, Any]]:
+    """列出所有已保存的录制"""
+    _ensure_recordings_dir()
+    recordings = []
+    for f in sorted(_RECORDINGS_DIR.glob("*.json"), key=os.path.getmtime, reverse=True):
+        try:
+            with open(f, 'r', encoding='utf-8') as fp:
+                data = json.load(fp)
+            recordings.append({
+                "name": data.get("name", f.stem),
+                "created_at": data.get("created_at", 0),
+                "action_count": data.get("action_count", 0),
+                "file": f.name,
+            })
+        except Exception:
+            recordings.append({"name": f.stem, "file": f.name, "action_count": 0})
+    return recordings
 
 def _record_action(action: Dict[str, Any]):
-    """记录操作"""
+    """记录操作（自动持久化到内存，停止时保存到文件）"""
     global _current_recording, _recorded_actions
     with _record_lock:
         if _current_recording:
@@ -847,7 +1133,7 @@ async def get_stats():
     
     return {
         "status": "ok",
-        "version": "2.0.1",
+        "version": "2.0.2",
         "platform": platform.system(),
         "plugins_count": plugins_count,
         "tools_count": tools_count,
@@ -951,48 +1237,130 @@ async def post_execute(req: ExecuteRequest):
             results.append({"step": i, "action": action, "success": False, "error": str(e)})
     return {"success": True, "steps": len(req.steps), "results": results}
 
-# ── v2.0.0 新增功能占位 ─────────────────────────────
+# ── v2.0.2 功能路由 ──────────────────────────────────
 @router.post("/ocr")
 async def post_ocr(req: OCRRequest):
-    """OCR识别 - 需要安装 tesseract"""
-    return {"success": False, "error": "OCR功能需要安装 tesseract-ocr (Linux: sudo apt install tesseract-ocr)"}
+    """OCR识别屏幕文字"""
+    region_str = f"{req.x},{req.y},{req.width},{req.height}" if all([req.x, req.y, req.width, req.height]) else None
+    return _ocr_screen(region_str, req.lang)
+
+@router.post("/ocr/find-text")
+async def post_find_text(req: FindTextRequest):
+    """查找屏幕上的文字，返回坐标"""
+    return _find_text_on_screen(req.text, req.region)
+
+@router.post("/ocr/click-text")
+async def post_click_text(req: FindTextRequest):
+    """查找文字并点击"""
+    return _click_text(req.text, req.region)
+
+@router.get("/ui/elements")
+async def get_ui_elements():
+    """获取当前窗口的 UI Automation 元素树"""
+    return _get_ui_elements()
+
+@router.post("/ui/find")
+async def post_find_ui_element(req: UIElementRequest):
+    """查找 UI 元素"""
+    return _find_ui_element(req.name, req.control_type)
+
+@router.post("/ui/click")
+async def post_click_ui_element(req: UIElementRequest):
+    """点击 UI 元素"""
+    return _click_ui_element(req.name, req.control_type)
 
 @router.post("/schedule")
 async def post_schedule(req: ScheduleRequest):
-    """定时任务 - 占位"""
-    return {"success": False, "error": "定时任务功能开发中"}
+    """定时任务 - 占位，待后续版本实现"""
+    return {"success": False, "error": "定时任务功能开发中，计划 v2.1.0"}
 
+# ── 录制回放持久化路由 ────────────────────────────────
 @router.post("/record/start")
 async def post_record_start(req: RecordStartRequest):
-    """开始录制 - 占位"""
-    return {"success": False, "error": "录制功能开发中"}
+    """开始录制操作"""
+    global _current_recording, _recorded_actions
+    if _current_recording:
+        return {"success": False, "error": f"正在录制中: {_current_recording}"}
+    _current_recording = req.name
+    _recorded_actions = []
+    return {"success": True, "name": req.name, "message": "开始录制"}
 
 @router.post("/record/stop")
 async def post_record_stop():
-    """停止录制 - 占位"""
-    return {"success": False, "error": "录制功能开发中"}
+    """停止录制并保存"""
+    global _current_recording, _recorded_actions
+    if not _current_recording:
+        return {"success": False, "error": "当前没有进行中的录制"}
+    name = _current_recording
+    result = _save_recording_to_file(name)
+    _current_recording = None
+    _recorded_actions = []
+    return {"success": True, "name": name, "saved": result['success'], "count": result.get('count', 0)}
 
 @router.get("/records")
 async def get_records():
-    """获取录制列表 - 占位"""
-    return {"success": True, "records": []}
+    """获取录制列表"""
+    recordings = _list_saved_recordings()
+    current = _current_recording
+    return {"success": True, "current_recording": current, "records": recordings}
+
+@router.post("/recordings/save")
+async def post_recordings_save(req: RecordSaveRequest):
+    """保存当前录制到文件"""
+    return _save_recording_to_file(req.name)
+
+@router.post("/recordings/load")
+async def post_recordings_load(req: RecordSaveRequest):
+    """从文件加载录制到内存"""
+    return _load_recording_from_file(req.name)
 
 @router.post("/playback")
 async def post_playback(req: PlaybackRequest):
-    """回放录制 - 占位"""
-    return {"success": False, "error": "回放功能开发中"}
+    """回放录制 - 执行已保存的操作序列"""
+    load_result = _load_recording_from_file(req.name)
+    if not load_result['success']:
+        return load_result
+    actions = load_result.get('actions', [])
+    results = []
+    for i, act in enumerate(actions):
+        act_type = act.get('action', '')
+        try:
+            if act_type == 'click':
+                r = _click(act['x'], act['y'], act.get('button', 'left'), act.get('clicks', 1))
+            elif act_type == 'move':
+                r = _move_mouse(act['x'], act['y'])
+            elif act_type == 'type':
+                r = _type_text(act['text'])
+            elif act_type == 'shortcut':
+                r = _shortcut(act['keys'])
+            elif act_type == 'scroll':
+                r = _scroll(act['x'], act['y'], act.get('direction', 'down'), act.get('wheel_times', 1))
+            elif act_type == 'wait':
+                time.sleep(act.get('seconds', 1))
+                r = {"success": True}
+            else:
+                r = {"success": False, "error": f"未知操作: {act_type}"}
+            results.append({"step": i, "action": act_type, "success": r.get('success', False)})
+            if not r.get('success', False):
+                time.sleep(0.1)
+        except Exception as e:
+            results.append({"step": i, "action": act_type, "success": False, "error": str(e)})
+        time.sleep(0.05)  # 操作间间隔
+    return {"success": True, "name": req.name, "total": len(actions), "results": results}
 
 @router.post("/smart-action")
 async def post_smart_action(req: SmartActionRequest):
-    """智能决策 - 占位"""
-    return {"success": False, "error": "智能决策功能开发中"}
+    """智能决策循环 - 周期性检查条件并执行"""
+    return {"success": False, "error": "智能决策功能开发中，计划 v2.1.0"}
 
 # ── 插件注册 ───────────────────────────────────────────
 class JiePlugin:
-    """界插件 - AI 浏览器 v2.0.1 (跨平台版: Windows + Linux + macOS)"""
+    """破插件 — AI 浏览器 v2.0.2 (OCR + UI自动化 + 录制持久化 + 扩展键码)"""
 
     def register(self, api):
         api.register_http_router(router, prefix="/jie-browser", tags=["jie-browser"])
-        logger.info(f"✅ 界 v2.0.1 已加载 — AI 浏览器就绪 (作者: 0+1+2≠3 Team 115886, 平台: {platform.system()})")
+        logger.info(f"破 v2.0.2 已加载 — AI 浏览器就绪 (OCR={'✓' if HAS_TESSERACT else '✗'}, "
+                    f"UI_Auto={'✓' if HAS_UI_AUTO else '✗'}, "
+                    f"平台={platform.system()})")
 
 plugin = JiePlugin()
