@@ -1,12 +1,12 @@
 {
   "id": "jie-browser",
   "name": "界",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "type": "general",
-  "description": "AI 浏览器 - 让 AI 像人一样看界面、操作界面、理解界面。跨平台桌面自动化中枢 (Windows + Linux)。v2.0.0新增：Linux支持、统一API。",
+  "description": "AI 浏览器 - 让 AI 像人一样看界面、操作界面、理解界面。跨平台桌面自动化中枢 (Windows + Linux + macOS)。v2.0.1新增：macOS 全面支持（CoreGraphics原生驱动）。",
   "description_i18n": {
-    "zh-CN": "AI 浏览器 — 让 AI 像人一样「看」界面、「操作」界面、「理解」界面。基于 Windows MCP 的桌面自动化中枢。v1.1.0新增：定时任务、录制回放、OCR识别、智能决策。",
-    "en-US": "AI Browser — Let AI see, operate, and understand interfaces like a human. Desktop automation hub powered by Windows MCP. v1.1.0 adds: scheduled tasks, record/playback, OCR, smart decisions."
+    "zh-CN": "AI 浏览器 — 让 AI 像人一样「看」界面、「操作」界面、「理解」界面。跨平台桌面自动化中枢。v2.0.1 新增 macOS 全面支持：CoreGraphics 原生鼠标/键盘/滚动、screencapture 截图、pbcopy 中文输入、AppleScript 窗口管理。零额外依赖。",
+    "en-US": "AI Browser — Let AI see, operate, and understand interfaces like a human. Cross-platform desktop automation hub. v2.0.1 adds full macOS support: native CoreGraphics mouse/keyboard/scroll, screencapture, pbcopy CJK input, AppleScript window management. Zero extra dependencies."
   },
   "author": "0+1+2≠3 Team 115886",
   "entry": {
@@ -24,6 +24,7 @@
     "tools_count": 16,
     "skills_count": 1,
     "concept": "观察 → 思考 → 行动 → 验证",
+    "platforms": ["Windows", "Linux", "macOS"],
     "core_capabilities": [
       "界面感知：截图 + UI 元素树提取",
       "语义理解：LLM 分析界面意图",
@@ -34,7 +35,8 @@
       "定时任务：按计划自动执行",
       "录制回放：记录并重放操作",
       "OCR识别：识别屏幕文字",
-      "智能决策：条件判断自动响应"
+      "智能决策：条件判断自动响应",
+      "macOS原生：CoreGraphics零依赖驱动"
     ]
   }
 }
